@@ -1,8 +1,3 @@
-// netlify/functions/strava-auth.js
-// Exchanges a Strava authorization code for an access token.
-// STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET must be set in
-// Netlify → Site configuration → Environment variables.
-
 exports.handler = async (event) => {
   const headers = {
     "Access-Control-Allow-Origin": "https://marathontrainingsam.netlify.app",
@@ -21,8 +16,9 @@ exports.handler = async (event) => {
 
   let code;
   try {
-    ({ code } = JSON.parse(event.body));
-  } catch {
+    const parsed = JSON.parse(event.body);
+    code = parsed.code;
+  } catch (e) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: "Invalid request body" }) };
   }
 
@@ -30,12 +26,50 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing code" }) };
   }
 
-  const { STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET } = process.env;
-  if (!STRAVA_CLIENT_ID || !STRAVA_CLIENT_SECRET) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "Server not configured — add env vars in Netlify" }) };
+  const clientId = process.env.STRAVA_CLIENT_ID;
+  const clientSecret = process.env.STRAVA_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "Server not configured" }) };
   }
 
   try {
     const resp = await fetch("https://www.strava.com/oauth/token", {
       method: "POST",
-      heade
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code: code,
+        grant_type: "authorization_code",
+      }),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      return {
+        statusCode: resp.status,
+        headers,
+        body: JSON.stringify({ error: data.message || "Strava error", detail: data }),
+      };
+    }
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_at: data.expires_at,
+        athlete: data.athlete,
+      }),
+    };
+  } catch (err) {
+    return {
+      statusCode: 502,
+      headers,
+      body: JSON.stringify({ error: "Token exchange failed", detail: err.message }),
+    };
+  }
+};
