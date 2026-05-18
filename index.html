@@ -167,11 +167,33 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--ink); 
 .phase-taper { background:var(--amber-dim);  color:var(--amber);  }
 .phase-race  { background:var(--ink);        color:var(--bg);     }
 .week-dates  { font-family:var(--font-mono); font-size:10px; color:var(--ink3); margin-left:auto; }
-.week-footer { display:flex; align-items:center; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border2); }
+.week-mileage-hero { padding:12px 14px 10px; margin-bottom:10px; border-bottom:1px solid var(--border2); }
+.week-mileage-row { display:flex; align-items:baseline; gap:6px; margin-bottom:6px; }
+.week-mileage-num { font-family:var(--font-display); font-size:42px; line-height:1; letter-spacing:0.02em; }
+.week-mileage-denom { font-family:var(--font-mono); font-size:13px; color:var(--ink3); }
+.week-mileage-label { font-family:var(--font-mono); font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink3); margin-bottom:6px; }
+.week-footer { display:flex; align-items:center; gap:10px; margin-top:10px; padding-top:10px; border-top:1px solid var(--border2); }
 .week-footer-miles { font-family:var(--font-mono); font-size:12px; color:var(--ink2); flex-shrink:0; white-space:nowrap; }
 .week-footer-miles strong { color:var(--ink); }
 .week-footer-bar { flex:1; }
 .week-footer-pct { font-family:var(--font-mono); font-size:10px; color:var(--ink3); margin-top:3px; }
+
+/* LIFT BADGES on day cards */
+.lift-chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
+.lift-chip { font-family:var(--font-mono); font-size:9px; letter-spacing:0.07em; text-transform:uppercase; font-weight:600; padding:2px 7px; border-radius:4px; background:rgba(212,160,23,0.18); color:var(--amber); border:1px solid rgba(212,160,23,0.3); }
+
+/* LIFT CHECKBOXES in modal */
+.lift-checks { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.lift-check-opt { display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:var(--radius); border:2px solid var(--border); background:var(--bg2); cursor:pointer; transition:all 0.15s; -webkit-tap-highlight-color:transparent; }
+.lift-check-opt.selected { border-color:var(--amber); background:rgba(212,160,23,0.12); }
+.lift-check-opt:active { transform:scale(0.97); }
+.lift-check-icon { font-size:18px; flex-shrink:0; }
+.lift-check-label { font-family:var(--font-mono); font-size:11px; letter-spacing:0.04em; color:var(--ink2); flex:1; }
+.lift-check-opt.selected .lift-check-label { color:var(--amber); }
+.lift-check-box { width:18px; height:18px; border-radius:5px; border:2px solid var(--border); display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all 0.15s; }
+.lift-check-opt.selected .lift-check-box { background:var(--amber); border-color:var(--amber); }
+.lift-check-box .ti { font-size:11px; color:var(--bg); }
+.modal-section-label { font-family:var(--font-mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink3); margin:16px 0 8px; padding-top:14px; border-top:1px solid var(--border); }
 
 /* DAY CARDS */
 .days-grid { display:flex; flex-direction:column; gap:5px; }
@@ -452,6 +474,30 @@ textarea { height:80px; resize:none; }
       <textarea id="dm-desc" placeholder="e.g. Easy recovery pace, keep HR under 140"></textarea>
     </div>
 
+    <div class="modal-section-label">Lifting session</div>
+    <div class="lift-checks" id="dm-lift-checks">
+      <div class="lift-check-opt" id="lc-push" onclick="toggleLift('push')">
+        <span class="lift-check-icon">💪</span>
+        <span class="lift-check-label">Push</span>
+        <div class="lift-check-box"><i class="ti ti-check"></i></div>
+      </div>
+      <div class="lift-check-opt" id="lc-pull" onclick="toggleLift('pull')">
+        <span class="lift-check-icon">🏋️</span>
+        <span class="lift-check-label">Pull</span>
+        <div class="lift-check-box"><i class="ti ti-check"></i></div>
+      </div>
+      <div class="lift-check-opt" id="lc-legs" onclick="toggleLift('legs')">
+        <span class="lift-check-icon">🦵</span>
+        <span class="lift-check-label">Legs</span>
+        <div class="lift-check-box"><i class="ti ti-check"></i></div>
+      </div>
+      <div class="lift-check-opt" id="lc-aesthetic" onclick="toggleLift('aesthetic')">
+        <span class="lift-check-icon">✨</span>
+        <span class="lift-check-label">Aesthetic</span>
+        <div class="lift-check-box"><i class="ti ti-check"></i></div>
+      </div>
+    </div>
+
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeDayModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveDayEdit()"><i class="ti ti-check"></i> Save</button>
@@ -503,6 +549,7 @@ let lastSync      = localStorage.getItem('strava-last-sync') || null;
 let chart         = null;
 let editTarget    = null; // { wi, di }
 let _dmType       = 'easy';
+let _dmLifts      = []; // active lift types for current edit
 
 function save() { localStorage.setItem('marathon-plan-v3', JSON.stringify(plan)); }
 
@@ -556,6 +603,12 @@ function fmtLong(d)  { return d.toLocaleDateString('en-US',{weekday:'long',month
 
 /* Runs on a specific date string */
 function runsOn(dateStr) { return plan.log.filter(e=>e.date===dateStr); }
+
+/* Sum of goalMiles assigned to non-rest days in a week (planned total from day goals) */
+function getPlannedMilesFromDays(wi) {
+  if (!plan.weeks[wi]) return 0;
+  return plan.weeks[wi].days.reduce((s,d) => s + (d.type !== 'rest' && d.goalMiles ? parseFloat(d.goalMiles) : 0), 0);
+}
 
 /* ═══════════════════════════════
    OAUTH / STRAVA
@@ -777,6 +830,32 @@ function generateWeeks(s){
   // Store how many pre-plan weeks there are so date math stays correct
   return [...preWeeks, ...planWeeks];
 }
+/* Apply the user's requested Base Build weekly template to all prebase weeks */
+function applyPrebaseSchedule(){
+  const template = [
+    { type:'rest',  goalMiles:null, desc:'' },          // Mon
+    { type:'easy',  goalMiles:8,    desc:'Easy run' },   // Tue
+    { type:'tempo', goalMiles:7,    desc:'Workout' },    // Wed
+    { type:'easy',  goalMiles:7,    desc:'Easy run' },   // Thu
+    { type:'rest',  goalMiles:null, desc:'' },          // Fri
+    { type:'long',  goalMiles:15,   desc:'Long run' },  // Sat
+    { type:'easy',  goalMiles:3,    desc:'Easy run' },  // Sun
+  ];
+  plan.weeks.forEach(w=>{
+    if(w.phase!=='prebase') return;
+    w.days.forEach((d,i)=>{
+      // Only overwrite if not already user-edited (no existing goalMiles set)
+      const tmpl=template[i];
+      d.type      = tmpl.type;
+      d.goalMiles = tmpl.goalMiles;
+      d.desc      = tmpl.desc;
+      if(!d.lifts) d.lifts=[];
+    });
+    // Update planned mileage to match template sum
+    w.planned=template.reduce((s,t)=>s+(t.goalMiles||0),0);
+  });
+}
+
 function saveSetup(){
   const s={
     raceName:  document.getElementById('s-race-name').value.trim()||'My Marathon',
@@ -791,7 +870,10 @@ function saveSetup(){
   if(!s.raceDate||!s.startDate){alert('Please enter both race date and training start date.');return;}
   // Store this Monday so week anchoring is stable even if user edits setup later
   s._thisMonday = getMondayOf(new Date()).toISOString().split('T')[0];
-  plan.setup=s; plan.weeks=generateWeeks(s); save(); showSection('schedule');
+  plan.setup=s; plan.weeks=generateWeeks(s);
+  // Apply default Base Build schedule to all prebase weeks
+  applyPrebaseSchedule();
+  save(); showSection('schedule');
 }
 function loadSetup(){
   if(!plan.setup)return;
@@ -951,6 +1033,7 @@ function renderSchedule(){
             </div>
             <div class="day-type-label" style="color:${tc.color};">${tc.label}</div>
             ${goalLine}${descLine}${stravaBlock}
+            ${d.lifts&&d.lifts.length?`<div class="lift-chips">${d.lifts.map(lt=>`<span class="lift-chip">${lt}</span>`).join('')}</div>`:''}
           </div>
           ${hasRun?`<div class="day-check"><i class="ti ti-check"></i></div>`:''}
           ${canEdit&&!hasRun?`<i class="ti ti-pencil day-edit-icon"></i>`:''}
@@ -970,20 +1053,27 @@ function renderSchedule(){
     // Prebase weeks get a subtle purple-tinted border
     const weekBorderStyle = w.phase === 'prebase' ? 'border-color:rgba(122,88,176,0.35);' : '';
 
+    // Compute planned total from day goals (live sum); fall back to w.planned
+    const dayGoalSum = getPlannedMilesFromDays(wi);
+    const plannedDisplay = dayGoalSum > 0 ? dayGoalSum : w.planned;
+    const milesColor = actual >= plannedDisplay && plannedDisplay > 0
+      ? 'var(--teal)' : actual > 0 ? 'var(--accent)' : 'var(--ink)';
+
     return divider + `<div class="week-card ${isCurrent?'is-current':isPastWeek?'is-past':''}" style="${weekBorderStyle}">
-      <div class="week-card-header">
+      <div class="week-card-header" style="margin-bottom:0;">
         <div class="week-num-badge ${isCurrent?'current':''}">${isCurrent?'→ ':''}W${w.week}</div>
         <span class="phase-badge phase-${w.phase}">${w.phase==='prebase'?'Base Building':w.phase}</span>
         <div class="week-dates">${dateRange}</div>
       </div>
-      <div class="days-grid">${dayCells}</div>
-      <div class="week-footer">
-        <div class="week-footer-miles"><strong>${actual.toFixed(1)}</strong>&thinsp;/&thinsp;${w.planned} mi</div>
-        <div class="week-footer-bar">
-          <div class="progress-track"><div class="progress-fill ${pct>=100?'full':''}" style="width:${pct}%;"></div></div>
-          <div class="week-footer-pct">${pct}% complete</div>
+      <div class="week-mileage-hero">
+        <div class="week-mileage-label">Weekly mileage</div>
+        <div class="week-mileage-row">
+          <div class="week-mileage-num" style="color:${milesColor};">${actual.toFixed(1)}</div>
+          <div class="week-mileage-denom">/ ${plannedDisplay.toFixed(1)} mi</div>
         </div>
+        <div class="progress-track"><div class="progress-fill ${pct>=100?'full':''}" style="width:${pct}%;"></div></div>
       </div>
+      <div class="days-grid">${dayCells}</div>
     </div>`;
   }).join('');
 }
@@ -1033,7 +1123,9 @@ function openDayModal(wi,di){
   document.getElementById('dm-miles').value=d.goalMiles??'';
   document.getElementById('dm-desc').value =d.desc??'';
   _dmType=d.type||'easy';
+  _dmLifts=[...(d.lifts||[])];
   buildTypePicker();
+  buildLiftChecks();
   document.getElementById('day-modal').classList.add('open');
 }
 function buildTypePicker(){
@@ -1049,6 +1141,20 @@ function buildTypePicker(){
   }).join('');
 }
 function pickType(t){ _dmType=t; buildTypePicker(); }
+
+const LIFT_TYPES = ['push','pull','legs','aesthetic'];
+function buildLiftChecks(){
+  LIFT_TYPES.forEach(lt=>{
+    const el=document.getElementById('lc-'+lt);
+    if(!el)return;
+    el.classList.toggle('selected', _dmLifts.includes(lt));
+  });
+}
+function toggleLift(lt){
+  const idx=_dmLifts.indexOf(lt);
+  if(idx>=0) _dmLifts.splice(idx,1); else _dmLifts.push(lt);
+  buildLiftChecks();
+}
 function saveDayEdit(){
   if(!editTarget)return;
   const {wi,di}=editTarget;
@@ -1056,6 +1162,7 @@ function saveDayEdit(){
   plan.weeks[wi].days[di].type     =_dmType;
   plan.weeks[wi].days[di].goalMiles=milesVal!==''?parseFloat(milesVal):null;
   plan.weeks[wi].days[di].desc     =document.getElementById('dm-desc').value.trim();
+  plan.weeks[wi].days[di].lifts    =[..._dmLifts];
   save(); closeDayModal(); renderSchedule();
   if(document.getElementById('section-overview').classList.contains('active')) renderOverview();
 }
