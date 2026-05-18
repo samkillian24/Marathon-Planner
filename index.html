@@ -396,11 +396,11 @@ textarea { height:80px; resize:none; }
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
         <div class="section-title" style="margin-bottom:0;">Schedule</div>
         <div class="legend-row" style="margin-bottom:0;">
-          <div class="legend-item"><div class="legend-dot" style="background:#7A58B0;"></div>Base Building</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#7A58B0;"></div>Base Build</div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--blue);"></div>Easy</div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--accent);"></div>Long</div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--purple);"></div>Tempo</div>
-          <div class="legend-item"><div class="legend-dot" style="background:var(--teal);"></div>Cross</div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--teal);"></div>Intervals</div>
         </div>
       </div>
       <div id="schedule-grid"></div>
@@ -524,7 +524,6 @@ const T = {
   long:      { label:'Long Run',   color:'var(--accent)', bg:'var(--accent-dim)', icon:'ti-road',    logBg:'#3D1A0A' },
   tempo:     { label:'Tempo',      color:'var(--purple)', bg:'var(--purple-dim)', icon:'ti-bolt',    logBg:'#2A1B40' },
   intervals: { label:'Intervals',  color:'var(--teal)',   bg:'var(--teal-dim)',   icon:'ti-repeat',  logBg:'#0A2E2A' },
-  cross:     { label:'Cross-train',color:'var(--green)',  bg:'var(--green-dim)',  icon:'ti-bike',    logBg:'#0E2A1A' },
   race:      { label:'Race',       color:'var(--ink)',    bg:'rgba(240,238,233,0.1)', icon:'ti-trophy', logBg:'#1A1A1A' },
   rest:      { label:'Rest',       color:'var(--ink3)',   bg:'var(--bg3)',        icon:'ti-moon',    logBg:'var(--bg3)' },
 };
@@ -534,7 +533,6 @@ const TYPE_OPTS = [
   { type:'long',      label:'Long Run',  icon:'ti-road'    },
   { type:'tempo',     label:'Tempo',     icon:'ti-bolt'    },
   { type:'intervals', label:'Intervals', icon:'ti-repeat'  },
-  { type:'cross',     label:'Cross',     icon:'ti-bike'    },
   { type:'rest',      label:'Rest',      icon:'ti-moon'    },
 ];
 
@@ -772,15 +770,14 @@ function buildWeekDays(phase, longDay, restDays){
   return labels.map((lbl,d)=>{
     const dow=dayMap[d]; let type='easy';
     if(phase==='prebase'){
-      // relaxed pattern for base building: rest Sun, cross Wed, easy rest
       if(dow===0) type='rest';
-      else if(dow===3) type='cross';
+      else if(dow===3) type='tempo'; // Wed always tempo
       else type='easy';
     } else {
       if(dow===longDay) type=phase==='race'?'rest':'long';
       else if(restDays===2&&(dow===0||dow===1)) type='rest';
       else if(restDays===1&&dow===0) type='rest';
-      else if(dow===3&&phase!=='race') type='cross';
+      else if(dow===3&&phase!=='race') type='tempo'; // Wed always tempo
       if(phase==='race'){if(d<2)type='easy';else if(d<5)type='rest';else if(d===5)type='long';else type='rest';}
     }
     return {label:lbl, type, goalMiles:null, desc:''};
@@ -830,29 +827,51 @@ function generateWeeks(s){
   // Store how many pre-plan weeks there are so date math stays correct
   return [...preWeeks, ...planWeeks];
 }
-/* Apply the user's requested Base Build weekly template to all prebase weeks */
+/* Apply default mile goals to ALL weeks — prebase uses fixed template,
+   plan weeks distribute w.planned across run days proportionally */
 function applyPrebaseSchedule(){
-  const template = [
-    { type:'rest',  goalMiles:null, desc:'' },          // Mon
-    { type:'easy',  goalMiles:8,    desc:'Easy run' },   // Tue
-    { type:'tempo', goalMiles:7,    desc:'Workout' },    // Wed
-    { type:'easy',  goalMiles:7,    desc:'Easy run' },   // Thu
-    { type:'rest',  goalMiles:null, desc:'' },          // Fri
-    { type:'long',  goalMiles:15,   desc:'Long run' },  // Sat
-    { type:'easy',  goalMiles:3,    desc:'Easy run' },  // Sun
+  // Fixed Base Build template (Mon–Sun)
+  const prebaseTemplate = [
+    { type:'rest',  goalMiles:null, desc:'' },         // Mon
+    { type:'easy',  goalMiles:8,    desc:'Easy run' }, // Tue
+    { type:'tempo', goalMiles:7,    desc:'Tempo' },    // Wed
+    { type:'easy',  goalMiles:7,    desc:'Easy run' }, // Thu
+    { type:'rest',  goalMiles:null, desc:'' },         // Fri
+    { type:'long',  goalMiles:15,   desc:'Long run' }, // Sat
+    { type:'easy',  goalMiles:3,    desc:'Easy run' }, // Sun
   ];
+
   plan.weeks.forEach(w=>{
-    if(w.phase!=='prebase') return;
-    w.days.forEach((d,i)=>{
-      // Only overwrite if not already user-edited (no existing goalMiles set)
-      const tmpl=template[i];
-      d.type      = tmpl.type;
-      d.goalMiles = tmpl.goalMiles;
-      d.desc      = tmpl.desc;
-      if(!d.lifts) d.lifts=[];
-    });
-    // Update planned mileage to match template sum
-    w.planned=template.reduce((s,t)=>s+(t.goalMiles||0),0);
+    if(!w.lifts) w.lifts=[];
+    if(w.phase==='prebase'){
+      w.days.forEach((d,i)=>{
+        const tmpl=prebaseTemplate[i];
+        d.type      = tmpl.type;
+        d.goalMiles = tmpl.goalMiles;
+        d.desc      = tmpl.desc;
+        if(!d.lifts) d.lifts=[];
+      });
+      w.planned=prebaseTemplate.reduce((s,t)=>s+(t.goalMiles||0),0);
+    } else {
+      // For official plan weeks: distribute w.planned across run days
+      // Long run gets ~35%, tempo gets ~18%, easy/intervals split the rest
+      const runDays=w.days.filter(d=>d.type!=='rest');
+      const longDays=runDays.filter(d=>d.type==='long');
+      const tempoDays=runDays.filter(d=>d.type==='tempo'||d.type==='intervals');
+      const easyDays=runDays.filter(d=>d.type==='easy');
+      const total=w.planned;
+      const longMi  = longDays.length  ? Math.round((total*0.35)/longDays.length*10)/10  : 0;
+      const tempoMi = tempoDays.length ? Math.round((total*0.20)/tempoDays.length*10)/10 : 0;
+      const easyPool= total - (longMi*longDays.length) - (tempoMi*tempoDays.length);
+      const easyMi  = easyDays.length  ? Math.round(easyPool/easyDays.length*10)/10      : 0;
+      w.days.forEach(d=>{
+        if(!d.lifts) d.lifts=[];
+        if(d.type==='rest'){ d.goalMiles=null; if(!d.desc) d.desc=''; return; }
+        if(d.type==='long')      { d.goalMiles=longMi;  if(!d.desc) d.desc='Long run';  }
+        else if(d.type==='tempo'||d.type==='intervals') { d.goalMiles=tempoMi; if(!d.desc) d.desc='Tempo workout'; }
+        else                     { d.goalMiles=easyMi;  if(!d.desc) d.desc='Easy run';  }
+      });
+    }
   });
 }
 
@@ -933,13 +952,25 @@ function renderThisWeekRows(cw){
     const runs=runsOn(dayStr), loggedMi=runs.reduce((s,r)=>s+(parseFloat(r.miles)||0),0);
     const isToday=i===todayIdx, isPast=dayDate<today&&!isToday;
     const tc=T[d.type]||T.easy;
-    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2);${isPast?'opacity:0.5':''}">
-      <div style="width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:10px;font-weight:700;flex-shrink:0;background:${tc.bg};color:${tc.color};">${d.label}</div>
-      <div style="flex:1;">
-        <div style="font-family:var(--font-mono);font-size:10px;color:var(--ink3);">${DAY_SHORT[i]}${isToday?' · Today':''}</div>
-        <div style="font-size:13px;font-weight:600;color:${tc.color};">${tc.label}</div>
-        ${d.goalMiles?`<div style="font-family:var(--font-mono);font-size:10px;color:var(--ink3);">Goal ${d.goalMiles} mi</div>`:''}
-        ${loggedMi>0?`<div style="font-family:var(--font-mono);font-size:11px;color:var(--teal);margin-top:2px;">✓ ${loggedMi.toFixed(1)} mi logged</div>`:''}
+    const isRest=d.type==='rest';
+    const lifts=d.lifts||[];
+    // miles display: if logged use actual; else show goal
+    const miDisplay = loggedMi>0
+      ? `<span style="font-family:var(--font-mono);font-size:15px;font-weight:700;color:var(--teal);">${loggedMi.toFixed(1)}</span><span style="font-family:var(--font-mono);font-size:10px;color:var(--ink3);"> mi ✓</span>`
+      : d.goalMiles
+        ? `<span style="font-family:var(--font-mono);font-size:15px;font-weight:700;color:${tc.color};">${d.goalMiles}</span><span style="font-family:var(--font-mono);font-size:10px;color:var(--ink3);"> mi goal</span>`
+        : '';
+    const liftBadges=lifts.length
+      ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px;">${lifts.map(lt=>`<span style="font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:2px 6px;border-radius:4px;background:rgba(212,160,23,0.18);color:var(--amber);border:1px solid rgba(212,160,23,0.3);">${lt}</span>`).join('')}</div>`
+      : '';
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:11px 0;border-bottom:1px solid var(--border2);${isPast?'opacity:0.5':''}">
+      <div style="width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:10px;font-weight:700;flex-shrink:0;background:${tc.bg};color:${tc.color};">${d.label}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--ink3);margin-bottom:1px;">${DAY_FULL[i]}${isToday?' · <span style=color:var(--accent)>Today</span>':''}</div>
+        <div style="font-size:13px;font-weight:600;color:${tc.color};margin-bottom:${!isRest&&miDisplay?'3px':'0'};">${isRest?'Rest Day':tc.label}</div>
+        ${!isRest&&miDisplay?`<div style="line-height:1;">${miDisplay}</div>`:''}
+        ${d.desc&&!isRest?`<div style="font-size:11px;color:var(--ink2);font-style:italic;margin-top:2px;">${d.desc}</div>`:''}
+        ${liftBadges}
       </div>
     </div>`;
   }).join('');
@@ -1012,16 +1043,34 @@ function renderSchedule(){
         ${runName?`<div class="day-run-name">${runName}</div>`:''}
       ` : '';
 
-      const goalLine = d.goalMiles
-        ? `<div class="day-goal" style="color:${tc.color};opacity:0.8;">Goal: ${d.goalMiles} mi</div>`
-        : '';
-      const descLine = d.desc ? `<div class="day-desc">${d.desc}</div>` : '';
+      const isRest = d.type==='rest';
+      const lifts  = d.lifts||[];
 
-      // Card background: slightly tinted if has run, else subtle bg3
+      // Miles display — large and prominent
+      // If Strava run logged: show actual miles in teal
+      // If goal set but no run: show goal miles in type color
+      // If rest: show nothing
+      const milesBlock = isRest ? '' : hasRun
+        ? `<div style="display:flex;align-items:baseline;gap:4px;margin:3px 0;">
+             <span style="font-family:var(--font-display);font-size:28px;line-height:1;letter-spacing:0.02em;color:var(--teal);">${totalMi.toFixed(1)}</span>
+             <span style="font-family:var(--font-mono);font-size:10px;color:var(--teal);opacity:0.8;">mi ✓</span>
+           </div>`
+        : d.goalMiles
+          ? `<div style="display:flex;align-items:baseline;gap:4px;margin:3px 0;">
+               <span style="font-family:var(--font-display);font-size:28px;line-height:1;letter-spacing:0.02em;color:${tc.color};">${d.goalMiles}</span>
+               <span style="font-family:var(--font-mono);font-size:10px;color:var(--ink3);">mi</span>
+             </div>`
+          : '';
+
+      const descLine = d.desc&&!isRest ? `<div class="day-desc">${d.desc}</div>` : '';
+      const liftChips = lifts.length
+        ? `<div class="lift-chips">${lifts.map(lt=>`<span class="lift-chip">${lt}</span>`).join('')}</div>`
+        : '';
+
       const cardBg = hasRun ? tc.bg.replace('0.15','0.12') : 'var(--bg3)';
       const todayOutline = isToday ? 'outline:2px solid var(--accent);outline-offset:-1px;' : '';
 
-      return `<div class="day-card ${d.type==='rest'?'rest-day':''} ${canEdit?'editable':''}"
+      return `<div class="day-card ${isRest?'rest-day':''} ${canEdit?'editable':''}"
             style="background:${cardBg};${todayOutline}"
             onclick="${canEdit?`openDayModal(${wi},${di})`:'void(0)'}">
           <div class="day-swatch" style="background:${tc.bg};color:${tc.color};">${d.label}</div>
@@ -1031,9 +1080,11 @@ function renderSchedule(){
               ${isToday?'<span class="today-pip"></span>':''}
               <span class="day-date-label">${fmtShort(dayDate)}</span>
             </div>
-            <div class="day-type-label" style="color:${tc.color};">${tc.label}</div>
-            ${goalLine}${descLine}${stravaBlock}
-            ${d.lifts&&d.lifts.length?`<div class="lift-chips">${d.lifts.map(lt=>`<span class="lift-chip">${lt}</span>`).join('')}</div>`:''}
+            <div class="day-type-label" style="color:${tc.color};">${isRest?'Rest':tc.label}</div>
+            ${milesBlock}
+            ${descLine}
+            ${stravaBlock}
+            ${liftChips}
           </div>
           ${hasRun?`<div class="day-check"><i class="ti ti-check"></i></div>`:''}
           ${canEdit&&!hasRun?`<i class="ti ti-pencil day-edit-icon"></i>`:''}
@@ -1175,6 +1226,12 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDayModal(); }
 ═══════════════════════════════ */
 parseOAuthCallback();
 updateStravaUI();
+// On load, ensure existing saved plans have goalMiles populated
+// (handles the case where plan was saved before this feature)
+if(plan.weeks.length && plan.weeks.some(w=>w.days.some(d=>d.type!=='rest'&&d.goalMiles==null))){
+  applyPrebaseSchedule();
+  save();
+}
 renderOverview();
 </script>
 </body>
