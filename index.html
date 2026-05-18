@@ -160,6 +160,7 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--ink); 
 .week-num-badge { font-family:var(--font-display); font-size:20px; letter-spacing:0.04em; min-width:46px; }
 .week-num-badge.current { color:var(--accent); }
 .phase-badge { font-family:var(--font-mono); font-size:10px; letter-spacing:0.06em; text-transform:uppercase; padding:3px 9px; border-radius:6px; font-weight:500; }
+.phase-prebase{ background:rgba(155,109,209,0.12); color:#7A58B0; }
 .phase-base  { background:var(--teal-dim);   color:var(--teal);   }
 .phase-build { background:var(--blue-dim);   color:var(--blue);   }
 .phase-peak  { background:var(--accent-dim); color:var(--accent); }
@@ -373,6 +374,7 @@ textarea { height:80px; resize:none; }
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
         <div class="section-title" style="margin-bottom:0;">Schedule</div>
         <div class="legend-row" style="margin-bottom:0;">
+          <div class="legend-item"><div class="legend-dot" style="background:#7A58B0;"></div>Base Building</div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--blue);"></div>Easy</div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--accent);"></div>Long</div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--purple);"></div>Tempo</div>
@@ -514,20 +516,27 @@ function getMondayOf(date) {
   return d;
 }
 function getMondayOfWeek(wi) {
-  if (!plan.setup?.startDate) return null;
-  const base = getMondayOf(new Date(plan.setup.startDate + 'T00:00:00'));
-  base.setDate(base.getDate() + wi * 7);
-  return base;
+  // Always anchored to _thisMonday (the Monday of the week when the plan was saved).
+  // This ensures pre-plan base-building weeks start from the current week.
+  if (!plan.setup) return null;
+  const anchor = plan.setup._thisMonday
+    ? new Date(plan.setup._thisMonday + 'T00:00:00')
+    : getMondayOf(new Date(plan.setup.startDate + 'T00:00:00'));
+  const d = new Date(anchor);
+  d.setDate(d.getDate() + wi * 7);
+  return d;
 }
 function getSundayOf(mon) {
   const d = new Date(mon); d.setDate(d.getDate() + 6); d.setHours(23,59,59,999); return d;
 }
 function getCurrentWeekIdx() {
-  if (!plan.setup?.startDate) return null;
-  const planMon = getMondayOf(new Date(plan.setup.startDate + 'T00:00:00'));
-  const today   = new Date(); today.setHours(0,0,0,0);
-  if (today < planMon) return null;
-  return Math.min(Math.floor((today - planMon) / (7*86400000)), plan.weeks.length - 1);
+  if (!plan.setup) return null;
+  const anchor = plan.setup._thisMonday
+    ? new Date(plan.setup._thisMonday + 'T00:00:00')
+    : getMondayOf(new Date(plan.setup.startDate + 'T00:00:00'));
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (today < anchor) return null;
+  return Math.min(Math.floor((today - anchor) / (7*86400000)), plan.weeks.length - 1);
 }
 function getActualMiles(wi) {
   if (!plan.setup?.startDate) return 0;
@@ -702,13 +711,54 @@ function getPhases(n){
     const p=i/n; if(p<0.25)return'base'; if(p<0.75)return'build'; return'peak';
   });
 }
+
+/** Build a single week object given its absolute week index (from thisMonday) and phase/planned info */
+function buildWeekDays(phase, longDay, restDays){
+  const dayMap=[1,2,3,4,5,6,0];
+  const labels=['M','T','W','T','F','S','S'];
+  return labels.map((lbl,d)=>{
+    const dow=dayMap[d]; let type='easy';
+    if(phase==='prebase'){
+      // relaxed pattern for base building: rest Sun, cross Wed, easy rest
+      if(dow===0) type='rest';
+      else if(dow===3) type='cross';
+      else type='easy';
+    } else {
+      if(dow===longDay) type=phase==='race'?'rest':'long';
+      else if(restDays===2&&(dow===0||dow===1)) type='rest';
+      else if(restDays===1&&dow===0) type='rest';
+      else if(dow===3&&phase!=='race') type='cross';
+      if(phase==='race'){if(d<2)type='easy';else if(d<5)type='rest';else if(d===5)type='long';else type='rest';}
+    }
+    return {label:lbl, type, goalMiles:null, desc:''};
+  });
+}
+
 function generateWeeks(s){
-  const start=getMondayOf(new Date(s.startDate+'T00:00:00'));
-  const race=new Date(s.raceDate+'T00:00:00');
-  const n=Math.max(4,Math.ceil((race-start)/86400000/7));
-  const base=parseFloat(s.baseMiles)||25, peak=parseFloat(s.peakMiles)||50;
-  const phases=getPhases(n), bStart=Math.floor(n*0.25), bLen=Math.floor(n*0.75)-bStart;
-  return Array.from({length:n},(_,w)=>{
+  const thisMonday  = getMondayOf(new Date()); // always start from THIS week
+  const planMonday  = getMondayOf(new Date(s.startDate+'T00:00:00'));
+  const race        = new Date(s.raceDate+'T00:00:00');
+  const base        = parseFloat(s.baseMiles)||25;
+  const peak        = parseFloat(s.peakMiles)||50;
+  const longDay     = parseInt(s.longDay);
+  const restDays    = parseInt(s.restDays);
+
+  // ── Pre-plan "Base Building" weeks (this week → week before planMonday) ──
+  const prePlanMs   = planMonday - thisMonday;
+  const prePlanWks  = Math.max(0, Math.round(prePlanMs / (7*86400000)));
+  const preWeeks    = Array.from({length:prePlanWks},(_,i)=>({
+    week:    i+1,
+    phase:   'prebase',
+    label:   'Base Building',
+    planned: Math.round(base * 10) / 10,
+    days:    buildWeekDays('prebase', longDay, restDays),
+  }));
+
+  // ── Main training plan weeks ──
+  const n = Math.max(4, Math.ceil((race-planMonday)/86400000/7));
+  const phases = getPhases(n);
+  const bStart = Math.floor(n*0.25), bLen=Math.floor(n*0.75)-bStart;
+  const planWeeks = Array.from({length:n},(_,w)=>{
     const phase=phases[w];
     let planned;
     if(phase==='base') planned=base;
@@ -716,20 +766,16 @@ function generateWeeks(s){
     else if(phase==='peak') planned=peak;
     else if(phase==='taper'){const ti=n-4-w;planned=peak*([0.75,0.55,0.4][Math.max(0,2-ti)]||0.5);}
     else planned=26.2;
-    const longDay=parseInt(s.longDay), restDays=parseInt(s.restDays);
-    const dayMap=[1,2,3,4,5,6,0];
-    const labels=['M','T','W','T','F','S','S'];
-    const days=labels.map((lbl,d)=>{
-      const dow=dayMap[d]; let type='easy';
-      if(dow===longDay) type=phase==='race'?'rest':'long';
-      else if(restDays===2&&(dow===0||dow===1)) type='rest';
-      else if(restDays===1&&dow===0) type='rest';
-      else if(dow===3&&phase!=='race') type='cross';
-      if(phase==='race'){if(d<2)type='easy';else if(d<5)type='rest';else if(d===5)type='long';else type='rest';}
-      return {label:lbl, type, goalMiles:null, desc:''};
-    });
-    return {week:w+1, phase, planned:Math.round(planned*10)/10, days};
+    return {
+      week:    prePlanWks+w+1,
+      phase,
+      planned: Math.round(planned*10)/10,
+      days:    buildWeekDays(phase, longDay, restDays),
+    };
   });
+
+  // Store how many pre-plan weeks there are so date math stays correct
+  return [...preWeeks, ...planWeeks];
 }
 function saveSetup(){
   const s={
@@ -743,6 +789,8 @@ function saveSetup(){
     restDays:  document.getElementById('s-rest').value,
   };
   if(!s.raceDate||!s.startDate){alert('Please enter both race date and training start date.');return;}
+  // Store this Monday so week anchoring is stable even if user edits setup later
+  s._thisMonday = getMondayOf(new Date()).toISOString().split('T')[0];
   plan.setup=s; plan.weeks=generateWeeks(s); save(); showSection('schedule');
 }
 function loadSetup(){
@@ -778,7 +826,7 @@ function renderOverview(){
     const w=plan.weeks[cw], actual=getActualMiles(cw);
     const pct=w.planned>0?Math.min(100,Math.round(actual/w.planned*100)):0;
     document.getElementById('m-week').textContent  =w.week+' / '+plan.weeks.length;
-    document.getElementById('m-phase').textContent =w.phase.charAt(0).toUpperCase()+w.phase.slice(1)+' phase';
+    document.getElementById('m-phase').textContent = w.phase==='prebase'?'Base Building':w.phase.charAt(0).toUpperCase()+w.phase.slice(1)+' phase';
     document.getElementById('m-actual').textContent=actual.toFixed(1);
     document.getElementById('m-target').textContent=' / '+w.planned+' mi';
     const mon=getMondayOfWeek(cw), sun=new Date(mon); sun.setDate(sun.getDate()+6);
@@ -909,10 +957,23 @@ function renderSchedule(){
         </div>`;
     }).join('');
 
-    return `<div class="week-card ${isCurrent?'is-current':isPastWeek?'is-past':''}">
+    // Divider between pre-plan base building and the official training plan
+    const isFirstPlanWeek = w.phase !== 'prebase' && (wi === 0 || plan.weeks[wi-1].phase === 'prebase');
+    const divider = isFirstPlanWeek
+      ? `<div style="display:flex;align-items:center;gap:10px;margin:4px 0 12px;">
+           <div style="flex:1;height:1px;background:var(--accent);opacity:0.35;"></div>
+           <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);opacity:0.8;white-space:nowrap;">— Training Plan Begins —</span>
+           <div style="flex:1;height:1px;background:var(--accent);opacity:0.35;"></div>
+         </div>`
+      : '';
+
+    // Prebase weeks get a subtle purple-tinted border
+    const weekBorderStyle = w.phase === 'prebase' ? 'border-color:rgba(122,88,176,0.35);' : '';
+
+    return divider + `<div class="week-card ${isCurrent?'is-current':isPastWeek?'is-past':''}" style="${weekBorderStyle}">
       <div class="week-card-header">
         <div class="week-num-badge ${isCurrent?'current':''}">${isCurrent?'→ ':''}W${w.week}</div>
-        <span class="phase-badge phase-${w.phase}">${w.phase}</span>
+        <span class="phase-badge phase-${w.phase}">${w.phase==='prebase'?'Base Building':w.phase}</span>
         <div class="week-dates">${dateRange}</div>
       </div>
       <div class="days-grid">${dayCells}</div>
